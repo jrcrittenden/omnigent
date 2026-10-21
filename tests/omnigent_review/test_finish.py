@@ -87,3 +87,16 @@ def test_cli_exit_codes(tmp_path: Path) -> None:
     assert main(argv) == 1
     _seed(ledger_path, approving_families=["openai"])
     assert main(argv) == 0
+
+
+def test_finish_output_is_labelled_advisory(tmp_path: Path) -> None:
+    """A passing finish says the result is advisory, and the registry records its authority."""
+    ledger_path = tmp_path / "l.json"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"tasks": {"auth": {"state": "running"}}}))
+    _seed(ledger_path, approving_families=["openai"])
+    code, messages = finish("auth", SHA, ledger_path=str(ledger_path), registry_path=str(registry))
+    assert code == 0 and "ADVISORY" in messages[-1]
+    assert json.loads(registry.read_text())["tasks"]["auth"]["review_authority"].startswith(
+        "advisory"
+    )

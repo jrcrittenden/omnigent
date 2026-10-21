@@ -11,6 +11,10 @@ from typing import Any
 from omnigent_review.policies import ready_check
 
 _TASK_KEYS = ("id", "task_id", "title", "name")
+ADVISORY_NOTE = (
+    "ADVISORY: recorded in an orchestrator-writable local ledger; this is not enforced "
+    "readiness and the test gate and clean-tree checks are not yet part of it."
+)
 
 
 def _find_task(registry: dict[str, Any], task: str) -> dict[str, Any] | None:
@@ -50,7 +54,7 @@ def finish(
     if not ready:
         return 1, reasons
     if registry_path is None:
-        return 0, [f"{task} is ready at {head_sha}"]
+        return 0, [f"{task}: review checks passed at {head_sha}. {ADVISORY_NOTE}"]
     path = Path(registry_path)
     registry = json.loads(path.read_text())
     entry = _find_task(registry, task)
@@ -58,8 +62,9 @@ def finish(
         return 3, [f"{task!r} not found in {registry_path}; registry unchanged"]
     entry["state"] = "ready"
     entry["review_head_sha"] = head_sha
+    entry["review_authority"] = "advisory-local-ledger"
     path.write_text(json.dumps(registry, indent=2, sort_keys=True))
-    return 0, [f"{task} marked ready at {head_sha}"]
+    return 0, [f"{task} marked ready at {head_sha}. {ADVISORY_NOTE}"]
 
 
 def main(argv: list[str] | None = None) -> int:

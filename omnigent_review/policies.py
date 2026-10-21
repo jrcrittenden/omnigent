@@ -246,8 +246,8 @@ def ready_check(
     """
     Decide whether *task* has enough independent approvals at *head_sha*.
 
-    The latest valid verdict per reviewer family at *head_sha* counts; any
-    family whose latest verdict is ``block`` fails the check.
+    Valid verdicts per reviewer family at *head_sha* count; any family with a
+    ``block`` at that head fails the check, even if it later approved.
 
     :param task: Implementer dispatch title.
     :param head_sha: Commit the deliverable is at.
@@ -259,16 +259,18 @@ def ready_check(
     producer = led["dispatches"].get(task)
     if producer is None or producer["family"] is None:
         return False, [f"no proven producer family recorded for {task!r}"]
-    latest: dict[str, _Json] = {}
+    by_family: dict[str, list[_Json]] = {}
     for record in led["verdicts"]:
         parsed = record["parsed"]
         if record["task"] != task or not parsed or not parsed["valid"]:
             continue
         if parsed["head_sha"] != head_sha or record["family"] in (None, producer["family"]):
             continue
-        latest[record["family"]] = parsed
-    reasons = [f"family {fam!r} blocks" for fam, p in latest.items() if p["verdict"] == "block"]
-    approving = [fam for fam, p in latest.items() if p["verdict"] == "approve"]
+        by_family.setdefault(record["family"], []).append(parsed)
+    # A block at this head stands; a later approval at the same head cannot erase it.
+    blocking = [fam for fam, ps in by_family.items() if any(p["verdict"] == "block" for p in ps)]
+    approving = [fam for fam in by_family if fam not in blocking]
+    reasons = [f"family {fam!r} blocks" for fam in blocking]
     if len(approving) < min_families:
         reasons.append(
             f"{len(approving)} independent approving families at {head_sha}; need {min_families}"

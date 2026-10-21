@@ -297,3 +297,23 @@ def test_example_guardrails_yaml_parses_and_resolves() -> None:
     }
     for policy in guardrails.policies:
         resolve_function_policy(policy)
+
+
+async def test_same_head_approval_cannot_erase_a_block_from_the_same_family(
+    tmp_path: Path,
+) -> None:
+    """Block then approve at one head by one family stays blocked; approval shopping fails."""
+    ledger_path = tmp_path / "l.json"
+    guard = _policy("family_guard", ledger_path)
+    recorder = _policy("verdict_recorder", ledger_path)
+    await _dispatch(guard, agent="claude_code", title="auth", purpose="implement")
+    await _dispatch(guard, agent="codex", title="review-auth@codex", purpose="review")
+    finding = {"severity": "blocking", "file": "a.py", "line": 7, "repro": "pytest -k x fails"}
+    await _child_result(
+        recorder, title="review-auth@codex", output=_verdict_block("block", [finding]), conv="c1"
+    )
+    await _child_result(
+        recorder, title="review-auth@codex", output=_verdict_block("approve"), conv="c2"
+    )
+    ready, reasons = ready_check("auth", SHA, ledger_path=str(ledger_path))
+    assert not ready and any("blocks" in reason for reason in reasons)
