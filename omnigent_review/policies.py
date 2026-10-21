@@ -183,6 +183,59 @@ def verdict_recorder(*, ledger_path: str) -> Callable[[_Json], _Json]:
     return _evaluate
 
 
+_FINISH_COMMAND = re.compile(
+    r"^(?:python3?|uv run python) -m omnigent_review finish"
+    r"(?: --[a-z-]+(?:[ =][A-Za-z0-9_./@:-]+)?)*$"
+)
+_READY_WORD = re.compile(r"\bready\b", re.IGNORECASE)
+
+
+def ready_write_guard(*, registry_name: str = "registry.json") -> Callable[[_Json], _Json]:
+    """
+    Factory: deny direct writes that mark a task ready in the registry file.
+
+    Readiness may only come from ``python -m omnigent_review finish``. A shell
+    command is exempt only when it is exactly that invocation with plain
+    arguments, so appending a second command to it is still denied. This is a
+    textual guard: it stops the direct route, not deliberate obfuscation.
+
+    :param registry_name: File name of the orchestrator registry, e.g. ``"registry.json"``.
+    :returns: Evaluator ``fn(event)`` returning ALLOW or DENY.
+    """
+    reason = (
+        "Mark a task ready only with `python -m omnigent_review finish --task <t> "
+        "--head-sha <sha>`; it checks independent review first."
+    )
+
+    def _evaluate(event: _Json) -> _Json:
+        data = event.get("data")
+        if event.get("type") != "tool_call" or not isinstance(data, dict):
+            return _ALLOW
+        name = data.get("name")
+        args = data.get("arguments") or {}
+        if name == "sys_os_write":
+            touched = str(args.get("path", "")).endswith(registry_name)
+            text = str(args.get("content", ""))
+        elif name == "sys_os_edit":
+            touched = str(args.get("path", "")).endswith(registry_name)
+            batch = args.get("edits") if isinstance(args.get("edits"), list) else []
+            text = " ".join(
+                [str(args.get("newText", ""))]
+                + [str(edit.get("newText", "")) for edit in batch if isinstance(edit, dict)]
+            )
+        elif name == "sys_os_shell":
+            command = str(args.get("command", ""))
+            touched = registry_name in command and not _FINISH_COMMAND.match(command.strip())
+            text = command
+        else:
+            return _ALLOW
+        if touched and _READY_WORD.search(text):
+            return _deny(reason)
+        return _ALLOW
+
+    return _evaluate
+
+
 def ready_check(
     task: str,
     head_sha: str,

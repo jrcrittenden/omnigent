@@ -1,0 +1,19 @@
+# Add under an orchestrator's config.yaml (e.g. a copy of examples/polly/config.yaml).
+guardrails:
+  policies:
+    review_family_guard:
+      type: function
+      function:
+        path: omnigent_review.policies.family_guard
+        arguments:
+          ledger_path: .polly/review_ledger.json
+    review_verdict_recorder:
+      type: function
+      function:
+        path: omnigent_review.policies.verdict_recorder
+        arguments:
+          ledger_path: .polly/review_ledger.json
+    review_ready_guard:
+      type: function
+      function:
+        path: omnigent_review.policies.ready_write_guard

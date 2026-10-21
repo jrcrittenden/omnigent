@@ -215,3 +215,85 @@ def test_inconsistent_verdicts_are_invalid() -> None:
     assert parse_verdict(_verdict_block("block", []))["valid"] is False  # type: ignore[index]
     assert parse_verdict(_verdict_block("approve"))["valid"] is True  # type: ignore[index]
     assert parse_verdict("no json here") is None
+
+
+def _write_guard() -> Any:
+    spec = FunctionPolicySpec(
+        name="ready_guard",
+        on=None,
+        function=FunctionRef(path="omnigent_review.policies.ready_write_guard"),
+    )
+    return resolve_function_policy(spec)
+
+
+async def _tool(guard: Any, name: str, **arguments: Any) -> PolicyAction:
+    ctx = EvaluationContext(
+        phase=Phase.TOOL_CALL,
+        content={"name": name, "arguments": arguments},
+        tool_name=name,
+    )
+    return (await guard.evaluate(ctx, {})).action
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "expected"),
+    [
+        ("sys_os_write", {"path": ".polly/registry.json", "content": '{"a": "ready"}'}, "DENY"),
+        ("sys_os_write", {"path": ".polly/registry.json", "content": '{"a": "running"}'}, "ALLOW"),
+        ("sys_os_write", {"path": "notes.md", "content": "ready to go"}, "ALLOW"),
+        ("sys_os_edit", {"path": "x/registry.json", "newText": "ready"}, "DENY"),
+        (
+            "sys_os_edit",
+            {"path": "x/registry.json", "edits": [{"oldText": "a", "newText": "READY"}]},
+            "DENY",
+        ),
+        ("sys_os_shell", {"command": "echo ready > .polly/registry.json"}, "DENY"),
+        ("sys_os_shell", {"command": "sed -i s/running/ready/ .polly/registry.json"}, "DENY"),
+        ("sys_os_shell", {"command": "cat .polly/registry.json"}, "ALLOW"),
+        (
+            "sys_os_shell",
+            {
+                "command": "python -m omnigent_review finish --task a --head-sha abc "
+                "--registry .polly/registry.json --min-families 2"
+            },
+            "ALLOW",
+        ),
+        (
+            "sys_os_shell",
+            {
+                "command": "python -m omnigent_review finish --task get-ready-flow "
+                "--head-sha abc --registry .polly/registry.json"
+            },
+            "ALLOW",
+        ),
+        (
+            "sys_os_shell",
+            {
+                "command": "python -m omnigent_review finish --task a --head-sha abc "
+                "--registry .polly/registry.json && echo ready > .polly/registry.json"
+            },
+            "DENY",
+        ),
+    ],
+)
+async def test_ready_write_guard(tool: str, arguments: dict[str, Any], expected: str) -> None:
+    """Direct readiness writes are denied; reads, other files, and exact finish pass."""
+    assert (await _tool(_write_guard(), tool, **arguments)).value.upper().endswith(expected)
+
+
+def test_example_guardrails_yaml_parses_and_resolves() -> None:
+    """The shipped guardrails snippet is accepted by the real spec parser and resolves."""
+    import yaml
+
+    from omnigent.spec.parser import _parse_guardrails
+
+    text = (Path(__file__).parents[2] / "omnigent_review/examples/guardrails.yaml").read_text()
+    guardrails = _parse_guardrails(yaml.safe_load(text)["guardrails"])
+    assert guardrails is not None
+    assert {p.name for p in guardrails.policies} == {
+        "review_family_guard",
+        "review_verdict_recorder",
+        "review_ready_guard",
+    }
+    for policy in guardrails.policies:
+        resolve_function_policy(policy)
